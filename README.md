@@ -5,8 +5,7 @@ rendered document page (plus the text boxes `locate` already found), it returns 
 solid mask of the non-text artwork — photos, figures, diagrams, halftones — with
 per-figure bounding boxes and a ready-to-composite RGBA cutout.
 
-It is the **drop-in replacement for SAM3** in the typesetter's `segment()` step:
-no prompts, no 17 GB model swap, ~370-490x faster.
+It is the **drop-in replacement for SAM3** in the typesetter's `segment()` step.
 
 ## Pipeline
 
