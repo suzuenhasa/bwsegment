@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# generated verification / example outputs
+example_out.png
+*_mask.png
+*_rgba.png

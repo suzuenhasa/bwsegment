@@ -1,0 +1,8 @@
+# PyTorch (Blackwell / cu128 build) — see README install notes
+torch>=2.7
+# GPU binary_fill_holes + label; zero-copy with torch via DLPack
+cupy-cuda12x>=13.4
+opencv-python
+numpy
+pillow
+scipy
