@@ -4,5 +4,6 @@ __pycache__/
 
 # generated verification / example outputs
 example_out.png
+example_both.png
 *_mask.png
 *_rgba.png

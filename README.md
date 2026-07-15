@@ -45,6 +45,40 @@ res["rgba"]    # HxWx4 uint8 cutout
 A module-level `segment(page_bgr, text_boxes, ...)` convenience is also exported
 for one-off calls (it caches a `PaperSegmenter` per weights/device).
 
+## Detector modes (CNN, classical, or union)
+
+`segment()` takes a `detector` argument selecting which content detector drives
+the result. All three feed the **same** GPU `outerfill` consolidation, so only
+the raw content map differs:
+
+| `detector`    | how it finds content                                   | wins on |
+|---------------|--------------------------------------------------------|---------|
+| `"cnn"` (default) | TinyUNet content probability                        | **clean-paper** pages — tighter, well-separated artwork islands on white |
+| `"classical"` | model-free local contrast + halftone texture (no weights) | **full illustrated** pages — captures the whole page + border better (e.g. `tm_p007`) |
+| `"union"`     | OR of the CNN and classical content maps               | **max recall** — when you'd rather over- than under-detect |
+
+They genuinely win on **different pages**, which is why both ship: keep both
+available and pick per page. The `"classical"` path needs **no weights** and is
+now **GPU-accelerated** (torch `max_pool2d` morphology for the paper baseline +
+`avg_pool2d` for the local-std texture — a few ms/page; it transparently falls
+back to the exact cv2/numpy path with no CUDA).
+
+```python
+res = seg.segment(page, text_boxes, detector="classical")   # or "cnn" / "union"
+
+# Compare all three on a page and choose per-page:
+res = seg.segment(page, text_boxes, return_all=True)
+res["cnn_mask"], res["classical_mask"], res["union_mask"]   # each post-outerfill
+res["mask"]     # == the selected `detector`'s mask (still "cnn" by default)
+```
+
+`detector="cnn"` is the default and preserves the exact prior behavior, so
+existing callers are unaffected.
+
+The classical detector is also exported directly as
+`classical_content(image_bgr, device="cuda:0", ...) -> HxW uint8 (255=content)`
+if you want just the raw content mask.
+
 ## Performance
 
 - **~25 ms / page** end-to-end on GPU.
