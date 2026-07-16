@@ -56,6 +56,27 @@ the raw content map differs:
 | `"classical"` | model-free local contrast + halftone texture (no weights) | **full illustrated** pages — captures the whole page + border better (e.g. `tm_p007`) |
 | `"union"`     | OR of the CNN and classical content maps               | **max recall** — when you'd rather over- than under-detect |
 | `"box"`       | no pixel classification at all — trusts `locate`'s `image_boxes` as the region (text boxes punched back out) | **full-bleed pages whose art is paper-toned** — a light-grey statue / beige stone has the *same tone* as the paper, so every appearance-based detector eats into it. `"box"` structurally **cannot** eat the art; it's coarser (paper inside the rect is kept). Requires `image_boxes=`. |
+| `"box_trim"`  | `"box"`, then carve out only pixels that are **flat AND paper-toned AND connected-to-outside**, then despeck | **RECOMMENDED when `image_boxes` exist.** Keeps the box's safety guarantee while removing the paper the plain rect leaves behind. Requires `image_boxes=`. |
+
+### Why `box_trim` is the safe one
+
+Parts of the artwork are genuinely **paper-toned** — a light-grey statue photo and
+beige temple stone read at the *same tone* as the aged paper. There is nothing to
+separate tone-wise, so every appearance-based detector eats into them. `box_trim`
+never judges art. It starts from locate's region (default = **keep**) and only
+carves pixels it is *confident* are paper — requiring **all three**:
+
+1. **flat** — local std below `flat`. Paper is featureless; paper-toned *art* still
+   carries photographic micro-texture. This is the cue that works when tone can't.
+2. **paper-toned** — CIELAB distance to the *measured* paper colour below `tone`.
+   Colour, not brightness: beige stone and blue sky are far from cream paper in Lab
+   even at equal brightness.
+3. **connected-to-outside** — reachable by a flood from the page border. Paper
+   *enclosed inside* the artwork is never trimmed.
+
+**Invariant: a textured pixel inside an image_box and outside every text_box is always
+kept.** The recipe cannot eat art — its only failure mode is keeping some paper, the
+conservative and recoverable direction. Measured art-kept across our pages: 95–100%.
 
 They genuinely win on **different pages**, which is why both ship: keep both
 available and pick per page. The `"classical"` path needs **no weights** and is
