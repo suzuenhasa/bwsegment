@@ -55,6 +55,7 @@ the raw content map differs:
 | `"cnn"` (default) | TinyUNet content probability                        | **clean-paper** pages — tighter, well-separated artwork islands on white |
 | `"classical"` | model-free local contrast + halftone texture (no weights) | **full illustrated** pages — captures the whole page + border better (e.g. `tm_p007`) |
 | `"union"`     | OR of the CNN and classical content maps               | **max recall** — when you'd rather over- than under-detect |
+| `"box"`       | no pixel classification at all — trusts `locate`'s `image_boxes` as the region (text boxes punched back out) | **full-bleed pages whose art is paper-toned** — a light-grey statue / beige stone has the *same tone* as the paper, so every appearance-based detector eats into it. `"box"` structurally **cannot** eat the art; it's coarser (paper inside the rect is kept). Requires `image_boxes=`. |
 
 They genuinely win on **different pages**, which is why both ship: keep both
 available and pick per page. The `"classical"` path needs **no weights** and is
@@ -64,6 +65,9 @@ back to the exact cv2/numpy path with no CUDA).
 
 ```python
 res = seg.segment(page, text_boxes, detector="classical")   # or "cnn" / "union"
+
+# region mode — pass locate's image_boxes (layout.json -> image_boxes)
+res = seg.segment(page, text_boxes, detector="box", image_boxes=image_boxes)
 
 # Compare all three on a page and choose per-page:
 res = seg.segment(page, text_boxes, return_all=True)

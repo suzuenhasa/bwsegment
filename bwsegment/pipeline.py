@@ -25,7 +25,7 @@ import numpy as np
 import torch
 
 from .model import load_paper_cnn
-from .strip import strip_text, TextBox
+from .strip import strip_text, TextBox, _box_to_xyxy_norm
 from .classical import classical_content
 from . import outerfill_gpu
 
@@ -78,11 +78,45 @@ class PaperSegmenter:
                  for (x0, y0, x1, y1) in raw_boxes]
         return mask, boxes
 
+    @staticmethod
+    def _rects(boxes, nw: int, nh: int, pad: int = 0):
+        """Normalised boxes -> clipped pixel rects [x1,y1,x2,y2]."""
+        out = []
+        for b in boxes or ():
+            parsed = _box_to_xyxy_norm(b)
+            if parsed is None:
+                continue
+            x1, y1, x2, y2 = parsed
+            px1 = max(0, int(round(x1 * nw)) - pad)
+            py1 = max(0, int(round(y1 * nh)) - pad)
+            px2 = min(nw, int(round(x2 * nw)) + pad)
+            py2 = min(nh, int(round(y2 * nh)) + pad)
+            if px2 > px1 and py2 > py1:
+                out.append([px1, py1, px2, py2])
+        return out
+
+    def _box_region(self, image_boxes, text_boxes, nw: int, nh: int):
+        """Region mode: trust locate's image_boxes as the artwork region.
+
+        No pixel classification at all, so it CANNOT eat into paper-toned art
+        (a light-grey statue, beige stone) the way appearance-based detectors do.
+        Coarser (paper inside the rect is kept), but safe. Text boxes are punched
+        back out — text is never artwork.
+        """
+        mask = np.zeros((nh, nw), np.uint8)
+        rects = self._rects(image_boxes, nw, nh)
+        for x1, y1, x2, y2 in rects:
+            mask[y1:y2, x1:x2] = 255
+        for x1, y1, x2, y2 in self._rects(text_boxes, nw, nh, pad=4):
+            mask[y1:y2, x1:x2] = 0
+        return mask, rects
+
     @torch.no_grad()
     def segment(self, page_bgr: np.ndarray, text_boxes: Sequence[TextBox],
                 conf: float = 0.5, merge_dist: int = 55,
                 drop_area: int = DEFAULT_DROP_AREA,
-                detector: str = "cnn", return_all: bool = False) -> dict:
+                detector: str = "cnn", return_all: bool = False,
+                image_boxes: Sequence[TextBox] | None = None) -> dict:
         """Segment artwork/figures on one page.
 
         Args:
@@ -97,22 +131,35 @@ class PaperSegmenter:
                           "classical" — model-free contrast/texture detector;
                                       captures full illustrated pages + borders.
                           "union"     — OR of both content maps (max recall).
-                        All three feed the SAME GPU outerfill consolidation.
+                          "box"       — REGION mode: trust locate's `image_boxes`
+                                      as the artwork region (requires image_boxes).
+                                      Does no pixel classification, so it cannot
+                                      eat into paper-toned art (light-grey statue,
+                                      beige stone) the way the others do; coarser
+                                      (paper inside the rect is kept). Use on
+                                      full-bleed illustration pages.
+                        cnn/classical/union feed the SAME GPU outerfill
+                        consolidation; "box" bypasses it (rects are already solid).
             return_all: if True, also compute and return every detector's result
-                        (post-outerfill) under cnn_mask / classical_mask /
-                        union_mask, so the caller can compare/choose per page.
+                        under cnn_mask / classical_mask / union_mask (and
+                        box_mask when image_boxes is given), so the caller can
+                        compare/choose per page.
+            image_boxes: locate's image_boxes (same formats as text_boxes).
+                        Required for detector="box"; otherwise optional.
 
         Returns dict:
             mask  : HxW uint8, 255 = artwork (from the selected `detector`).
             boxes : list of [x1, y1, x2, y2] pixel boxes (x2/y2 exclusive).
             rgba  : HxWx4 uint8, original RGB kept where artwork, else transparent.
           plus, when return_all=True:
-            cnn_mask, classical_mask, union_mask : HxW uint8 255-masks, each the
-                post-outerfill result of that detector.
+            cnn_mask, classical_mask, union_mask [, box_mask] : HxW uint8 255-masks.
         """
-        if detector not in ("cnn", "classical", "union"):
+        if detector not in ("cnn", "classical", "union", "box"):
             raise ValueError(
-                f"unknown detector {detector!r}; expected 'cnn', 'classical' or 'union'")
+                f"unknown detector {detector!r}; expected 'cnn', 'classical', "
+                f"'union' or 'box'")
+        if detector == "box" and not image_boxes:
+            raise ValueError("detector='box' requires image_boxes (locate's image_boxes)")
 
         nh, nw = page_bgr.shape[:2]
 
@@ -142,6 +189,9 @@ class PaperSegmenter:
                 out = self._consolidate(cnn_binary, merge_dist, drop_area)
             elif name == "classical":
                 out = self._consolidate(classical_binary, merge_dist, drop_area)
+            elif name == "box":
+                # region mode: rects are already solid, no consolidation needed
+                out = self._box_region(image_boxes, text_boxes, nw, nh)
             else:  # union
                 union_binary = (
                     (cnn_binary.astype(bool) | classical_binary.astype(bool))
@@ -162,6 +212,8 @@ class PaperSegmenter:
             result["cnn_mask"] = get("cnn")[0]
             result["classical_mask"] = get("classical")[0]
             result["union_mask"] = get("union")[0]
+            if image_boxes:
+                result["box_mask"] = get("box")[0]
         return result
 
 
@@ -173,7 +225,8 @@ def segment(page_bgr: np.ndarray, text_boxes: Sequence[TextBox],
             weights_path: str = _DEFAULT_WEIGHTS, device: str = "cuda:0",
             conf: float = 0.5, merge_dist: int = 55,
             drop_area: int = DEFAULT_DROP_AREA,
-            detector: str = "cnn", return_all: bool = False) -> dict:
+            detector: str = "cnn", return_all: bool = False,
+            image_boxes: Sequence[TextBox] | None = None) -> dict:
     """One-off segment(); builds (and caches) a PaperSegmenter under the hood."""
     key = (weights_path, device)
     seg = _CACHE.get(key)
@@ -181,4 +234,5 @@ def segment(page_bgr: np.ndarray, text_boxes: Sequence[TextBox],
         seg = _CACHE[key] = PaperSegmenter(weights_path=weights_path, device=device)
     return seg.segment(page_bgr, text_boxes, conf=conf,
                        merge_dist=merge_dist, drop_area=drop_area,
-                       detector=detector, return_all=return_all)
+                       detector=detector, return_all=return_all,
+                       image_boxes=image_boxes)
