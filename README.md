@@ -55,22 +55,32 @@ the raw content map differs:
 | `"cnn"` (default) | TinyUNet content probability                        | **clean-paper** pages — tighter, well-separated artwork islands on white |
 | `"classical"` | model-free local contrast + halftone texture (no weights) | **full illustrated** pages — captures the whole page + border better (e.g. `tm_p007`) |
 | `"union"`     | OR of the CNN and classical content maps               | **max recall** — when you'd rather over- than under-detect |
-| `"box"`       | no pixel classification at all — trusts `locate`'s `image_boxes` as the region (text boxes punched back out) | **full-bleed pages whose art is paper-toned** — a light-grey statue / beige stone has the *same tone* as the paper, so every appearance-based detector eats into it. `"box"` structurally **cannot** eat the art; it's coarser (paper inside the rect is kept). Requires `image_boxes=`. |
+| `"box"`       | no pixel classification at all — trusts `locate`'s `image_boxes` as the region (text boxes punched back out) | **pages where an appearance detector eats the art** — greyscale photos and line-art especially. `"box"` structurally **cannot** eat the art; it's coarser (paper inside the rect is kept). Requires `image_boxes=`. |
 | `"box_trim"`  | `"box"`, then carve out only pixels that are **flat AND paper-toned AND connected-to-outside**, then despeck | **RECOMMENDED when `image_boxes` exist.** Keeps the box's safety guarantee while removing the paper the plain rect leaves behind. Requires `image_boxes=`. |
 
 ### Why `box_trim` is the safe one
 
-Parts of the artwork are genuinely **paper-toned** — a light-grey statue photo and
-beige temple stone read at the *same tone* as the aged paper. There is nothing to
-separate tone-wise, so every appearance-based detector eats into them. `box_trim`
-never judges art. It starts from locate's region (default = **keep**) and only
-carves pixels it is *confident* are paper — requiring **all three**:
+Appearance detectors eat greyscale artwork on these pages — and **not because the
+art and paper share a tone**. Measured on a real page, the art sits at tone
+**32–150** while clean paper's 1st percentile is **221**: a ~70-level gap with
+nothing in it. The real cause is **contaminated background statistics**. A
+detector that learns "background" from everything outside the region is learning
+the *text column* — white paper **and black ink** — so its model spans the whole
+grey axis and explains any greyscale artwork about as well as it explains paper.
+Chromatic art (blue sky, beige stone) survives on saturation alone; a neutral B&W
+photo is a coin flip. Box-init GrabCut fails this way by construction, and it's
+the most likely reason a content CNN or a border flood drops a statue.
 
-1. **flat** — local std below `flat`. Paper is featureless; paper-toned *art* still
-   carries photographic micro-texture. This is the cue that works when tone can't.
+`box_trim` sidesteps it twice over. It **never models art** — it starts from
+locate's region, where the default is **keep** — and its paper reference is
+**one-class, measured from a clean sample**: the bright tail of the outside, so
+ink can't drag it dark. A pixel is carved only if **all three** hold:
+
+1. **flat** — local std below `flat`. Paper is featureless; art carries
+   photographic micro-texture down to its lightest highlights.
 2. **paper-toned** — CIELAB distance to the *measured* paper colour below `tone`.
    Colour, not brightness: beige stone and blue sky are far from cream paper in Lab
-   even at equal brightness.
+   even at equal brightness — a brightness-only rule misses exactly this.
 3. **connected-to-outside** — reachable by a flood from the page border. Paper
    *enclosed inside* the artwork is never trimmed.
 

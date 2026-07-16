@@ -7,22 +7,31 @@ trim.py — safe paper trimming inside a region (the "rect + safe-trim" recipe).
 
 Why this exists
 ---------------
-On a scanned page, parts of the artwork are genuinely PAPER-TONED — a light-grey
-statue photo and beige temple stone read at the same tone as the aged paper
-around them. Every appearance-based detector (local contrast, a paper/content
-CNN, a magic-wand colour flood) therefore EATS INTO the art: there is nothing to
-separate, tone-wise.
+Appearance-based detectors (local contrast, a paper/content CNN, a magic-wand
+colour flood, box-init GrabCut) all EAT INTO greyscale art on these pages. The
+cause is not ambiguous tone — measured on a real page, the artwork sits at tone
+32-150 while clean paper's 1st percentile is 221, a ~70-level gap. The cause is
+CONTAMINATED BACKGROUND STATISTICS: those detectors learn "background" from the
+whole area outside the region, which is the TEXT COLUMN — white paper *and black
+ink*. That model spans the entire grey axis, so it explains any greyscale
+artwork about as well as it explains paper. Chromatic art (blue sky, beige
+stone) survives on saturation alone; a neutral B&W photo is a coin flip.
 
-So don't judge art. Start from the region locate already gives us (image_boxes),
-where the default is KEEP, and only carve away paper we are *confident* about.
-A pixel is confidently paper only if ALL THREE hold:
+The fix is to make the paper test ONE-CLASS and fit it on a CLEAN sample. We
+never model "art" at all: start from the region locate already gives us
+(image_boxes), where the default is KEEP, and only carve away paper we are
+*confident* about — with the reference measured from the bright tail of the
+outside, so ink cannot drag it dark (see `paper_lab`). A pixel is confidently
+paper only if ALL THREE hold:
 
-  1. FLAT              — local std < `flat`. Paper is featureless; paper-toned ART
-                         still carries photographic micro-texture. This is the cue
-                         that separates the two when tone cannot.
+  1. FLAT              — local std < `flat`. Paper is featureless; art (including
+                         its lightest highlights) carries photographic
+                         micro-texture. This is the cue that holds when tone is
+                         close.
   2. PAPER-TONED       — CIELAB distance to the measured paper colour < `tone`.
                          Uses colour, not brightness: beige stone and blue sky are
                          far from cream paper in Lab even at equal brightness.
+                         Brightness-only rules miss exactly this.
   3. CONNECTED-TO-OUTSIDE — reachable by a flood from the page border through
                          other candidate-paper pixels. Paper *enclosed inside* the
                          artwork is never trimmed.
